@@ -132,6 +132,20 @@
     .toolbar-buttons { gap: 2px; }
   }
 
+
+  /* ---------- 觸控縮放支援（v4 補丁） ---------- */
+  .chart-area, .chart-content, .chart-content svg {
+    touch-action: none;  /* 由 JS 全權處理手勢，避免瀏覽器搶用 */
+    -webkit-user-select: none; user-select: none;
+  }
+  .zoom-hint {
+    position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.65); color: #fff; padding: 6px 14px; border-radius: 18px;
+    font-size: 12px; pointer-events: none; opacity: 0; transition: opacity 0.3s;
+    z-index: 50;
+  }
+  .zoom-hint.show { opacity: 1; }
+
 </style>
 </head>
 <body>
@@ -165,6 +179,7 @@
         滑鼠滾輪縮放、按住拖曳平移；節點懸停顯示完整文字</p>
       </div>
       <div class="chart-content" id="chartContent" style="display:none"></div>
+      <div class="zoom-hint" id="zoomHint"></div>
     </div>
   </div>
 </div>
@@ -183,6 +198,104 @@ mermaid.initialize({
   flowchart: { useMaxWidth: false, htmlLabels: true, curve: 'basis', nodeSpacing: 50, rankSpacing: 70 },
   fontFamily: '"Microsoft JhengHei","Noto Sans TC","Segoe UI",sans-serif'
 });
+
+
+// ---------- 自訂觸控事件處理器（v4：支援 pinch zoom） ----------
+const touchEventsHandler = {
+  haltEventListeners: ['touchstart', 'touchend', 'touchmove', 'touchleave', 'touchcancel'],
+  init: function(options) {
+    const instance = options.instance;
+    const svg = options.svgElement;
+    let lastX = 0, lastY = 0;
+    let initialDistance = 0, initialZoom = 1, initialCenter = null;
+    let mode = null; // 'pan' | 'pinch'
+    let lastTapTime = 0;
+
+    function distance(t1, t2) {
+      const dx = t1.clientX - t2.clientX;
+      const dy = t1.clientY - t2.clientY;
+      return Math.sqrt(dx*dx + dy*dy);
+    }
+    function midpoint(t1, t2) {
+      return { x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 };
+    }
+    function showHint(text) {
+      const h = document.getElementById('zoomHint');
+      if (!h) return;
+      h.textContent = text;
+      h.classList.add('show');
+      clearTimeout(showHint._t);
+      showHint._t = setTimeout(() => h.classList.remove('show'), 800);
+    }
+
+    this._onStart = function(e) {
+      if (e.touches.length === 1) {
+        const now = Date.now();
+        if (now - lastTapTime < 300) {
+          // 雙擊：放大 2 倍於該點
+          const t = e.touches[0];
+          const z = instance.getZoom();
+          instance.zoomAtPoint(z * 1.6, {x: t.clientX, y: t.clientY});
+          showHint('放大 ' + Math.round(instance.getZoom()*100) + '%');
+          lastTapTime = 0;
+          return;
+        }
+        lastTapTime = now;
+        mode = 'pan';
+        lastX = e.touches[0].clientX;
+        lastY = e.touches[0].clientY;
+      } else if (e.touches.length === 2) {
+        mode = 'pinch';
+        initialDistance = distance(e.touches[0], e.touches[1]);
+        initialZoom = instance.getZoom();
+        initialCenter = midpoint(e.touches[0], e.touches[1]);
+      }
+    };
+
+    this._onMove = function(e) {
+      e.preventDefault();
+      if (mode === 'pan' && e.touches.length === 1) {
+        const dx = e.touches[0].clientX - lastX;
+        const dy = e.touches[0].clientY - lastY;
+        instance.panBy({x: dx, y: dy});
+        lastX = e.touches[0].clientX;
+        lastY = e.touches[0].clientY;
+      } else if (mode === 'pinch' && e.touches.length === 2) {
+        const newDist = distance(e.touches[0], e.touches[1]);
+        if (initialDistance === 0) return;
+        const scale = newDist / initialDistance;
+        const c = midpoint(e.touches[0], e.touches[1]);
+        const targetZoom = Math.max(0.2, Math.min(10, initialZoom * scale));
+        instance.zoomAtPoint(targetZoom, {x: c.x, y: c.y});
+      }
+    };
+
+    this._onEnd = function(e) {
+      if (e.touches.length === 0) {
+        if (mode === 'pinch') showHint(Math.round(instance.getZoom()*100) + '%');
+        mode = null;
+      } else if (e.touches.length === 1) {
+        mode = 'pan';
+        lastX = e.touches[0].clientX;
+        lastY = e.touches[0].clientY;
+      }
+    };
+
+    svg.addEventListener('touchstart', this._onStart, { passive: false });
+    svg.addEventListener('touchmove', this._onMove, { passive: false });
+    svg.addEventListener('touchend', this._onEnd, { passive: false });
+    svg.addEventListener('touchcancel', this._onEnd, { passive: false });
+
+    this._svg = svg;
+  },
+  destroy: function() {
+    if (!this._svg) return;
+    this._svg.removeEventListener('touchstart', this._onStart);
+    this._svg.removeEventListener('touchmove', this._onMove);
+    this._svg.removeEventListener('touchend', this._onEnd);
+    this._svg.removeEventListener('touchcancel', this._onEnd);
+  }
+};
 
 let currentChart = null;
 let panZoom = null;
@@ -283,10 +396,11 @@ async function loadChart(id) {
     injectTooltips(svgEl, c.tooltips);
 
     // pan/zoom
-    panZoom = svgPanZoom(svgEl, {
+    window.panZoomInst = panZoom = svgPanZoom(svgEl, {
       zoomEnabled: true, controlIconsEnabled: false,
       fit: true, center: true, minZoom: 0.2, maxZoom: 10,
-      mouseWheelZoomEnabled: true, dblClickZoomEnabled: false
+      mouseWheelZoomEnabled: true, dblClickZoomEnabled: false,
+      customEventsHandler: touchEventsHandler
     });
   } catch (e) {
     content.innerHTML = '<div class="empty-state"><h2>渲染失敗</h2><pre style="text-align:left;color:#c00">'+escapeHtml(e.message || e)+'</pre></div>';
@@ -323,8 +437,9 @@ function injectTooltips(svg, tooltips) {
 }
 
 document.getElementById('searchInput').addEventListener('input', e => renderNav(e.target.value));
-document.getElementById('zoomIn').addEventListener('click', () => panZoom && panZoom.zoomIn());
-document.getElementById('zoomOut').addEventListener('click', () => panZoom && panZoom.zoomOut());
+document.getElementById('zoomIn').addEventListener('click', () => { if(panZoom){ panZoom.zoomIn(); showZoomPct(); } });
+document.getElementById('zoomOut').addEventListener('click', () => { if(panZoom){ panZoom.zoomOut(); showZoomPct(); } });
+function showZoomPct(){ const h = document.getElementById('zoomHint'); if(!h||!panZoom) return; h.textContent = Math.round(panZoom.getZoom()*100)+'%'; h.classList.add('show'); clearTimeout(showZoomPct._t); showZoomPct._t = setTimeout(()=>h.classList.remove('show'),800); }
 document.getElementById('zoomReset').addEventListener('click', () => { if(panZoom){ panZoom.resetZoom(); panZoom.center(); } });
 document.getElementById('fitScreen').addEventListener('click', () => { if(panZoom){ panZoom.fit(); panZoom.center(); } });
 document.getElementById('fullscreen').addEventListener('click', () => {
