@@ -88,6 +88,50 @@
   /* Resize sidebar */
   .resizer { width: 4px; cursor: ew-resize; background: transparent; }
   .resizer:hover { background: #1976d2; }
+
+  /* ---------- 行動裝置 RWD（v3 補丁） ---------- */
+  .menu-toggle {
+    display: none; background: rgba(255,255,255,0.18); color: #fff; border: 0;
+    padding: 6px 11px; cursor: pointer; border-radius: 4px; margin-right: 6px;
+    font-size: 18px; line-height: 1; flex-shrink: 0;
+  }
+  .menu-toggle:hover { background: rgba(255,255,255,0.32); }
+  .backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    z-index: 999; display: none;
+  }
+  .backdrop.show { display: block; }
+
+  @media (max-width: 768px) {
+    html, body { height: 100%; }
+    .layout { height: 100dvh; height: 100vh; }
+    .sidebar {
+      position: fixed; left: 0; top: 0; bottom: 0;
+      width: 84vw !important; min-width: 0 !important; max-width: 320px;
+      transform: translateX(-100%); transition: transform 0.25s ease;
+      z-index: 1000; box-shadow: 2px 0 12px rgba(0,0,0,0.2);
+    }
+    .sidebar.open { transform: translateX(0); }
+    .resizer { display: none; }
+    .main { width: 100%; min-width: 0; }
+    .menu-toggle { display: inline-flex; align-items: center; justify-content: center; }
+    .toolbar { padding: 8px 10px; }
+    .toolbar h2 { font-size: 14px; }
+    .toolbar button { padding: 7px 10px; font-size: 14px; min-width: 36px; }
+    .info-panel { font-size: 11px; padding: 6px 12px; max-height: 110px;
+                  grid-template-columns: 64px 1fr; }
+    .empty-state { padding: 24px 16px; }
+    .empty-state h2 { font-size: 18px; }
+    .nav-item { padding: 9px 10px; font-size: 14px; }  /* 觸控更友善 */
+    .ttp { max-width: 90vw; font-size: 12px; }
+  }
+  /* 超小螢幕（<420px） */
+  @media (max-width: 420px) {
+    .toolbar h2 { font-size: 13px; }
+    .toolbar button { padding: 6px 8px; font-size: 13px; min-width: 32px; }
+    .toolbar-buttons { gap: 2px; }
+  }
+
 </style>
 </head>
 <body>
@@ -103,6 +147,7 @@
   <div class="resizer" id="resizer"></div>
   <div class="main">
     <div class="toolbar">
+      <button class="menu-toggle" id="menuToggle" title="選單" aria-label="選單">☰</button>
       <h2 id="chartTitle">請從左側選擇流程圖</h2>
       <div class="toolbar-buttons">
         <button id="zoomOut" title="縮小">－</button>
@@ -125,6 +170,7 @@
 </div>
 
 <div class="ttp" id="tooltip"></div>
+<div class="backdrop" id="backdrop"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
@@ -307,6 +353,39 @@ document.addEventListener('keydown', (e) => {
     const w = Math.max(220, Math.min(560, e.clientX));
     sidebar.style.width = w + 'px';
     sidebar.style.minWidth = w + 'px';
+  });
+})();
+
+
+// ---------- 行動裝置抽屜（v3 補丁） ----------
+(function setupDrawer(){
+  const sidebar = document.querySelector('.sidebar');
+  const toggle = document.getElementById('menuToggle');
+  const backdrop = document.getElementById('backdrop');
+  function open(){ sidebar.classList.add('open'); backdrop.classList.add('show'); }
+  function close(){ sidebar.classList.remove('open'); backdrop.classList.remove('show'); }
+  function isMobile(){ return window.matchMedia('(max-width: 768px)').matches; }
+  toggle.addEventListener('click', () => {
+    if (sidebar.classList.contains('open')) close(); else open();
+  });
+  backdrop.addEventListener('click', close);
+  // 切換流程圖後自動關閉抽屜（手機）
+  document.getElementById('navList').addEventListener('click', () => {
+    if (isMobile()) setTimeout(close, 150);
+  });
+  // 視窗縮放回桌機尺寸時，清除 open 狀態
+  window.addEventListener('resize', () => { if (!isMobile()) close(); });
+  // 旋轉/尺寸變更後重新 fit svg-pan-zoom
+  let resizeTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (window.panZoomInst) {
+        window.panZoomInst.resize();
+        window.panZoomInst.fit();
+        window.panZoomInst.center();
+      }
+    }, 200);
   });
 })();
 
